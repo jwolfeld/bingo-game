@@ -1,3 +1,8 @@
 .gitignore
 .DS_Store
 target/
+client/node_modules/
+client/build/
+.idea/
+*.iml
+.env*
