@@ -24,6 +24,51 @@ public class BingoDtos {
         public void setPlayerCount(int playerCount) { this.playerCount = playerCount; }
     }
 
+    /** POST /api/games/{id}/add-grids — generate additional grids for an existing game */
+    public static class AddGridsRequest {
+        private int playerCount;
+
+        public int getPlayerCount() { return playerCount; }
+        public void setPlayerCount(int playerCount) { this.playerCount = playerCount; }
+    }
+
+    /** POST /api/random-words — generate random words excluding existing ones */
+    public static class RandomWordsRequest {
+        private int count;
+        private List<String> excludeWords;
+
+        public int getCount() { return count; }
+        public void setCount(int count) { this.count = count; }
+
+        public List<String> getExcludeWords() { return excludeWords; }
+        public void setExcludeWords(List<String> excludeWords) { this.excludeWords = excludeWords; }
+    }
+
+    /** Returned for POST /api/random-words */
+    public static class RandomWordsResponse {
+        private List<String> words;
+
+        public RandomWordsResponse(List<String> words) { this.words = words; }
+        public List<String> getWords() { return words; }
+    }
+
+    /** Returned for POST /api/games/{id}/add-grids */
+    public static class AddGridsResponse {
+        private int newGridCount;
+        private int totalGridCount;
+        private int fromIndex;   // first new grid index (for partial download)
+
+        public AddGridsResponse(int newGridCount, int totalGridCount, int fromIndex) {
+            this.newGridCount   = newGridCount;
+            this.totalGridCount = totalGridCount;
+            this.fromIndex      = fromIndex;
+        }
+
+        public int getNewGridCount()   { return newGridCount; }
+        public int getTotalGridCount() { return totalGridCount; }
+        public int getFromIndex()      { return fromIndex; }
+    }
+
     // ── Responses ─────────────────────────────────────────────────
 
     /** Returned when a game is created */

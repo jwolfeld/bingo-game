@@ -1,9 +1,11 @@
 package com.bingo.controller;
 
 import com.bingo.dto.BingoDtos.*;
+import com.bingo.model.BingoGrid;
 import com.bingo.model.GameInstance;
 import com.bingo.service.GameService;
 import com.bingo.service.PdfService;
+import com.bingo.service.WordService;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -21,18 +23,39 @@ import java.util.zip.ZipOutputStream;
  * REST controller exposing all Bingo game endpoints.
  *
  * Base path: /api/games
+ * Also handles: POST /api/random-words
  */
 @RestController
-@RequestMapping("/api/games")
-@CrossOrigin(origins = "*")   // Adjust for production
+@CrossOrigin(origins = "*")
 public class GameController {
 
     private final GameService gameService;
     private final PdfService  pdfService;
+    private final WordService  wordService;
 
-    public GameController(GameService gameService, PdfService pdfService) {
+    public GameController(GameService gameService, PdfService pdfService, WordService wordService) {
         this.gameService = gameService;
         this.pdfService  = pdfService;
+        this.wordService = wordService;
+    }
+
+    // ── Random word generation (pre-game) ─────────────────────────
+
+    /**
+     * POST /api/random-words
+     * Body: { count: N, excludeWords: [...] }
+     * Returns N random dictionary words not in excludeWords.
+     */
+    @PostMapping("/api/random-words")
+    public ResponseEntity<?> randomWords(@RequestBody RandomWordsRequest request) {
+        try {
+            List<String> words = wordService.randomWords(
+                    request.getCount(),
+                    request.getExcludeWords() == null ? List.of() : request.getExcludeWords());
+            return ResponseEntity.ok(new RandomWordsResponse(words));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(new ErrorResponse(e.getMessage()));
+        }
     }
 
     // ── Create game ───────────────────────────────────────────────
@@ -40,9 +63,8 @@ public class GameController {
     /**
      * POST /api/games
      * Body: { words: [...], playerCount: N }
-     * Creates a new game instance in SETUP state.
      */
-    @PostMapping
+    @PostMapping("/api/games")
     public ResponseEntity<?> createGame(@RequestBody CreateGameRequest request) {
         try {
             GameInstance game = gameService.createGame(request.getWords(), request.getPlayerCount());
@@ -52,13 +74,32 @@ public class GameController {
         }
     }
 
-    // ── Game state ────────────────────────────────────────────────
+    // ── Add grids ─────────────────────────────────────────────────
 
     /**
-     * GET /api/games/{id}/state
-     * Returns full game state including grids, called words, etc.
+     * POST /api/games/{id}/add-grids
+     * Body: { playerCount: N }
+     * Generates N additional grids for an existing game still in SETUP state.
+     * Returns the index of the first new grid so the client can download just those.
      */
-    @GetMapping("/{id}/state")
+    @PostMapping("/api/games/{id}/add-grids")
+    public ResponseEntity<?> addGrids(@PathVariable String id,
+                                       @RequestBody AddGridsRequest request) {
+        try {
+            int fromIndex = gameService.addGrids(id, request.getPlayerCount());
+            int total     = gameService.getGame(id).map(g -> g.getGrids().size()).orElse(0);
+            int newCount  = total - fromIndex;
+            return ResponseEntity.ok(new AddGridsResponse(newCount, total, fromIndex));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(new ErrorResponse(e.getMessage()));
+        }
+    }
+
+    // ── Game state ────────────────────────────────────────────────
+
+    @GetMapping("/api/games/{id}/state")
     public ResponseEntity<?> getState(@PathVariable String id) {
         return gameService.getGame(id)
                 .map(game -> {
@@ -78,11 +119,7 @@ public class GameController {
 
     // ── Start game ────────────────────────────────────────────────
 
-    /**
-     * POST /api/games/{id}/start
-     * Transitions the game from SETUP → PLAYING.
-     */
-    @PostMapping("/{id}/start")
+    @PostMapping("/api/games/{id}/start")
     public ResponseEntity<?> startGame(@PathVariable String id) {
         try {
             GameInstance game = gameService.startGame(id);
@@ -102,11 +139,7 @@ public class GameController {
 
     // ── Next word ─────────────────────────────────────────────────
 
-    /**
-     * POST /api/games/{id}/next-word
-     * Draws the next random word. Returns the word and updated called-word list.
-     */
-    @PostMapping("/{id}/next-word")
+    @PostMapping("/api/games/{id}/next-word")
     public ResponseEntity<?> nextWord(@PathVariable String id) {
         try {
             String word = gameService.nextWord(id);
@@ -124,11 +157,7 @@ public class GameController {
 
     // ── End game ──────────────────────────────────────────────────
 
-    /**
-     * POST /api/games/{id}/end
-     * Marks the game as FINISHED.
-     */
-    @PostMapping("/{id}/end")
+    @PostMapping("/api/games/{id}/end")
     public ResponseEntity<?> endGame(@PathVariable String id) {
         try {
             GameInstance game = gameService.endGame(id);
@@ -146,16 +175,23 @@ public class GameController {
     // ── Download PDFs ─────────────────────────────────────────────
 
     /**
-     * GET /api/games/{id}/download-grids
-     * Generates one PDF per player grid and returns them as a zip archive.
+     * GET /api/games/{id}/download-grids?from=0
+     * Generates one PDF per grid starting at index `from` (default 0 = all grids).
+     * The filename includes the range so successive downloads have distinct names.
      */
-    @GetMapping("/{id}/download-grids")
-    public ResponseEntity<?> downloadGrids(@PathVariable String id) {
+    @GetMapping("/api/games/{id}/download-grids")
+    public ResponseEntity<?> downloadGrids(@PathVariable String id,
+                                            @RequestParam(defaultValue = "0") int from) {
         return gameService.getGame(id).map(game -> {
             try {
+                List<BingoGrid> grids = game.getGrids();
+                List<BingoGrid> subset = grids.subList(
+                        Math.max(0, Math.min(from, grids.size())),
+                        grids.size());
+
                 ByteArrayOutputStream zipBuffer = new ByteArrayOutputStream();
                 try (ZipOutputStream zos = new ZipOutputStream(zipBuffer)) {
-                    for (var grid : game.getGrids()) {
+                    for (BingoGrid grid : subset) {
                         byte[] pdf = pdfService.generateGridPdf(grid, "Bingo");
                         String fileName = "player_" + grid.getPlayerNumber() + "_grid.pdf";
                         zos.putNextEntry(new ZipEntry(fileName));
@@ -164,9 +200,16 @@ public class GameController {
                     }
                 }
 
+                // Filename encodes the player range for clarity
+                int first = subset.isEmpty() ? from + 1 : subset.get(0).getPlayerNumber();
+                int last  = subset.isEmpty() ? from + 1 : subset.get(subset.size() - 1).getPlayerNumber();
+                String zipName = (first == last)
+                        ? "bingo_grids_player_" + first + ".zip"
+                        : "bingo_grids_players_" + first + "-" + last + ".zip";
+
                 HttpHeaders headers = new HttpHeaders();
                 headers.setContentType(MediaType.parseMediaType("application/zip"));
-                headers.setContentDispositionFormData("attachment", "bingo_grids.zip");
+                headers.setContentDispositionFormData("attachment", zipName);
 
                 return ResponseEntity.ok()
                         .headers(headers)

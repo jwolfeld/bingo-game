@@ -64,6 +64,35 @@ public class GameService {
     }
 
     /**
+     * Add more player grids to an existing game that is still in SETUP state.
+     * New grids are appended to the existing list, with player numbers continuing
+     * from where the previous batch left off.
+     *
+     * @param gameId      the game to add grids to
+     * @param playerCount number of additional grids to generate
+     * @return the index of the first newly added grid (for partial zip download)
+     */
+    public int addGrids(String gameId, int playerCount) {
+        GameInstance game = requireGame(gameId);
+        if (game.getState() != GameInstance.GameState.SETUP) {
+            throw new IllegalStateException("Cannot add grids after the game has started.");
+        }
+        if (playerCount < 1) {
+            throw new IllegalArgumentException("Player count must be at least 1.");
+        }
+
+        int fromIndex = game.getGrids().size();
+        int nextPlayerNumber = fromIndex + 1;
+
+        for (int i = 0; i < playerCount; i++) {
+            game.getGrids().add(generateSingleGrid(game.getWordList(), nextPlayerNumber++));
+        }
+
+        storage.save(game);
+        return fromIndex;
+    }
+
+    /**
      * Retrieve a game by ID.
      */
     public Optional<GameInstance> getGame(String gameId) {
