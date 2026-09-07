@@ -1,8 +1,30 @@
-.gitignore
-.DS_Store
+# ── Maven build output ────────────────────────────────────────
 target/
+
+# ── Node / React build output ────────────────────────────────
 client/node_modules/
 client/build/
+
+# ── IDEs ──────────────────────────────────────────────────────
 .idea/
 *.iml
-.env*
+.vscode/
+*.swp
+*.swo
+
+# ── macOS ─────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+
+# ── Environment / secrets ─────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── React testing artifacts ───────────────────────────────────
+client/coverage/
+

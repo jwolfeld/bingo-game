@@ -3,35 +3,53 @@ import React, { useState } from 'react';
 import { createGame, addGrids, downloadGrids, fetchRandomWords } from '../api/bingoApi';
 
 export default function SetupMode({ onGameCreated }) {
-  const [wordsText, setWordsText]         = useState('');
-  const [playerCount, setPlayerCount]     = useState(4);
-  const [loading, setLoading]             = useState(false);
-  const [error, setError]                 = useState('');
-  const [gameId, setGameId]               = useState(null);
+  const [wordsText, setWordsText]           = useState('');
+  const [playerCount, setPlayerCount]       = useState(4);
+  const [loading, setLoading]               = useState(false);
+  const [error, setError]                   = useState('');
+  const [gameId, setGameId]                 = useState(null);
   const [totalGridCount, setTotalGridCount] = useState(0);
-  const [downloading, setDownloading]     = useState(false);
-  const [downloadCount, setDownloadCount] = useState(0); // how many zip files produced
-  const [lastDownloadedIndex, setLastDownloadedIndex] = useState(0);
-  const [addingGrids, setAddingGrids]     = useState(false);
+  const [addingGrids, setAddingGrids]       = useState(false);
   const [addPlayerCount, setAddPlayerCount] = useState(4);
-  const [fetchingWords, setFetchingWords] = useState(false);
-  const [randomCount, setRandomCount]     = useState('');  // controlled input, string
+  const [fetchingWords, setFetchingWords]   = useState(false);
+  const [randomCount, setRandomCount]       = useState('');
 
+  // Each entry: { from: number, to: number, downloading: boolean }
+  // 'from' and 'to' are 0-based grid indices (to is exclusive, like slice).
+  // Label is derived: "Players 1–4", "Players 5–8", etc.
+  const [batches, setBatches] = useState([]);
+
+  // ── Derived ────────────────────────────────────────────────────
   const wordList = wordsText
     .split(/[\n,]+/)
     .map(w => w.trim().toUpperCase())
     .filter(w => w.length > 0);
 
-  const uniqueCount = new Set(wordList).size;
-
-  // Default random word count = max(1, 24 - current unique word count)
+  const uniqueCount      = new Set(wordList).size;
   const defaultRandomCount = Math.max(1, 24 - uniqueCount);
-
-  // The count field shows defaultRandomCount as placeholder when empty
   const effectiveRandomCount = randomCount === ''
     ? defaultRandomCount
     : parseInt(randomCount, 10);
 
+  // ── Helpers ────────────────────────────────────────────────────
+  function batchLabel(from, to) {
+    // from/to are 0-based indices; player numbers are 1-based
+    const first = from + 1;
+    const last  = to;   // to is already exclusive so last player = to
+    return first === last
+      ? `Player ${first}`
+      : `Players ${first}–${last}`;
+  }
+
+  function batchFilename(from, to) {
+    const first = from + 1;
+    const last  = to;
+    return first === last
+      ? `bingo_grid_player_${first}.zip`
+      : `bingo_grids_players_${first}-${last}.zip`;
+  }
+
+  // ── Random words ───────────────────────────────────────────────
   async function handleFetchRandomWords() {
     const count = effectiveRandomCount;
     if (isNaN(count) || count < 1 || count > 99) {
@@ -43,10 +61,9 @@ export default function SetupMode({ onGameCreated }) {
     try {
       const result = await fetchRandomWords(count, wordList);
       if (result.words.length === 0) {
-        setError('No more words available in the dictionary that aren\'t already in your list.');
+        setError("No more words available in the dictionary that aren't already in your list.");
         return;
       }
-      // Append new words to the textarea
       const newWords = result.words.join('\n');
       setWordsText(prev => {
         const trimmed = prev.trimEnd();
@@ -59,6 +76,7 @@ export default function SetupMode({ onGameCreated }) {
     }
   }
 
+  // ── Create game ────────────────────────────────────────────────
   async function handleCreate() {
     setError('');
     if (uniqueCount < 24) {
@@ -70,8 +88,8 @@ export default function SetupMode({ onGameCreated }) {
       const result = await createGame(wordList, playerCount);
       setGameId(result.gameId);
       setTotalGridCount(result.gridCount);
-      setLastDownloadedIndex(0);
-      setDownloadCount(0);
+      // First batch: players 1..gridCount
+      setBatches([{ from: 0, to: result.gridCount, downloading: false }]);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -79,36 +97,16 @@ export default function SetupMode({ onGameCreated }) {
     }
   }
 
-  async function handleDownload(fromIndex, label) {
-    setDownloading(true);
-    setError('');
-    try {
-      const blob = await downloadGrids(gameId, fromIndex);
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = label;
-      a.click();
-      URL.revokeObjectURL(url);
-      setLastDownloadedIndex(totalGridCount);
-      setDownloadCount(c => c + 1);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setDownloading(false);
-    }
-  }
-
+  // ── Add grids ──────────────────────────────────────────────────
   async function handleAddGrids() {
     setError('');
     setAddingGrids(true);
     try {
       const result = await addGrids(gameId, addPlayerCount);
-      setTotalGridCount(result.totalGridCount);
-      // fromIndex tells us where the new batch starts — store it so the
-      // download button fetches only the new grids
-      setLastDownloadedIndex(result.fromIndex);
-      setDownloadCount(c => c + 1); // treat pending new batch as next download
+      const newFrom = result.fromIndex;
+      const newTo   = result.totalGridCount;
+      setTotalGridCount(newTo);
+      setBatches(prev => [...prev, { from: newFrom, to: newTo, downloading: false }]);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -116,14 +114,55 @@ export default function SetupMode({ onGameCreated }) {
     }
   }
 
+  // ── Download a specific batch ──────────────────────────────────
+  async function handleDownloadBatch(batchIndex) {
+    const batch = batches[batchIndex];
+    // Mark this batch as downloading
+    setBatches(prev => prev.map((b, i) =>
+      i === batchIndex ? { ...b, downloading: true } : b));
+    setError('');
+    try {
+      const blob = await downloadGrids(gameId, batch.from);
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = batchFilename(batch.from, batch.to);
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBatches(prev => prev.map((b, i) =>
+        i === batchIndex ? { ...b, downloading: false } : b));
+    }
+  }
+
+  // ── Download all grids ─────────────────────────────────────────
+  const [downloadingAll, setDownloadingAll] = useState(false);
+
+  async function handleDownloadAll() {
+    setDownloadingAll(true);
+    setError('');
+    try {
+      const blob = await downloadGrids(gameId, 0);
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `bingo_grids_all_players_1-${totalGridCount}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDownloadingAll(false);
+    }
+  }
+
   function handleStartPlay() {
     onGameCreated(gameId);
   }
 
-  // Download button label for the initial download vs additional batches
-  const newGridsAvailable = totalGridCount > lastDownloadedIndex;
-  const newGridCount      = totalGridCount - lastDownloadedIndex;
-
+  // ── Render ─────────────────────────────────────────────────────
   return (
     <div className="setup-mode">
       <div className="setup-header">
@@ -140,7 +179,8 @@ export default function SetupMode({ onGameCreated }) {
             <label className="field-label">
               Word List
               <span className="word-count" data-ok={uniqueCount >= 24}>
-                {uniqueCount} unique word{uniqueCount !== 1 ? 's' : ''} {uniqueCount >= 24 ? '✓' : `(need ${24 - uniqueCount} more)`}
+                {uniqueCount} unique word{uniqueCount !== 1 ? 's' : ''}{' '}
+                {uniqueCount >= 24 ? '✓' : `(need ${24 - uniqueCount} more)`}
               </span>
             </label>
             <textarea
@@ -221,28 +261,35 @@ export default function SetupMode({ onGameCreated }) {
             <p className="game-id-label">Game ID: <code>{gameId}</code></p>
           </div>
 
-          {/* ── Download current batch ── */}
-          {newGridsAvailable && (
-            <div className="action-card">
-              <h4 className="action-card-title">
-                {downloadCount === 0
-                  ? `Download all ${totalGridCount} grid${totalGridCount !== 1 ? 's' : ''}`
-                  : `Download ${newGridCount} new grid${newGridCount !== 1 ? 's' : ''} (players ${lastDownloadedIndex + 1}–${totalGridCount})`}
-              </h4>
-              <button
-                className="secondary-btn"
-                onClick={() => handleDownload(
-                  lastDownloadedIndex,
-                  downloadCount === 0
-                    ? 'bingo_grids.zip'
-                    : `bingo_grids_players_${lastDownloadedIndex + 1}-${totalGridCount}.zip`
-                )}
-                disabled={downloading}
-              >
-                {downloading ? 'Preparing Download…' : '⬇ Download ZIP'}
-              </button>
+          {/* ── Download buttons ── */}
+          <div className="action-card">
+            <h4 className="action-card-title">Download Grids</h4>
+
+            <div className="batch-buttons">
+              {batches.map((batch, i) => (
+                <button
+                  key={i}
+                  className="batch-btn"
+                  onClick={() => handleDownloadBatch(i)}
+                  disabled={batch.downloading}
+                >
+                  {batch.downloading
+                    ? 'Preparing…'
+                    : `⬇ ${batchLabel(batch.from, batch.to)}`}
+                </button>
+              ))}
+
+              {batches.length >= 2 && (
+                <button
+                  className="batch-btn batch-btn-all"
+                  onClick={handleDownloadAll}
+                  disabled={downloadingAll}
+                >
+                  {downloadingAll ? 'Preparing…' : `⬇ All Players 1–${totalGridCount}`}
+                </button>
+              )}
             </div>
-          )}
+          </div>
 
           {/* ── Add more grids ── */}
           <div className="action-card">

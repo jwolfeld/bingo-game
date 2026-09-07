@@ -275,6 +275,30 @@ button { cursor: pointer; border: none; border-radius: var(--radius-sm); font-fa
 .random-btn:hover:not(:disabled) { background: var(--border); }
 .random-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
+/* Batch download buttons */
+.batch-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.batch-btn {
+  background: var(--panel2);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.batch-btn:hover:not(:disabled) { background: var(--border); }
+.batch-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.batch-btn-all {
+  border-color: var(--accent2);
+  color: var(--accent2);
+}
+.batch-btn-all:hover:not(:disabled) { background: rgba(255,200,87,0.1); }
+
 .success-card {
   background: var(--panel);
   border: 1px solid var(--border);
